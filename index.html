@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>QCGE</title>
+  <style>
+    /* ================== CSS ================== */
+    body {
+      margin: 0; 
+      padding: 0; 
+      background-color: #000; 
+      color: #fff; 
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    h1 {
+      margin: 20px 0;
+    }
+    #game-container {
+      margin: 0 auto;
+      width: 90%;
+      max-width: 800px;
+      background-color: #111;
+      border: 1px solid #444;
+      padding: 20px;
+      box-sizing: border-box;
+      margin-top: 20px;
+    }
+    #level-info, #instructions {
+      margin: 10px 0;
+    }
+    .state-display {
+      background-color: #222;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #444;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    .gate-button {
+      background-color: #6600cc;
+      border: none;
+      color: #fff;
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      min-width: 80px;
+    }
+    .gate-button:hover {
+      background-color: #9933ff;
+    }
+    #status {
+      margin: 10px 0;
+      font-weight: bold;
+    }
+    #next-level-btn {
+      background-color: #008000;
+      margin-top: 20px;
+      padding: 10px 20px;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    #next-level-btn:hover {
+      background-color: #00cc00;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Quantum Entanglement Challenge</h1>
+  <div id="game-container">
+    <p id="instructions">
+      You have a two-qubit system (4-dimensional state vector).  
+      Your goal: use quantum gates (X, Z, H, S, CNOT) to transform the 
+      <strong>initial state</strong> into the <strong>target entangled state</strong>.
+      This game checks if your final state matches the target 
+      <em>up to a global phase</em>.
+    </p>
+
+    <!-- Level Information -->
+    <p id="level-info"></p>
+
+    <!-- Current State Display -->
+    <div class="state-display">
+      <strong>Current State:</strong>
+      <div id="current-state">Loading...</div>
+    </div>
+
+    <!-- Target State Display -->
+    <div class="state-display">
+      <strong>Target State:</strong>
+      <div id="target-state">Loading...</div>
+    </div>
+
+    <!-- Gate Buttons -->
+    <div id="gate-buttons"></div>
+
+    <!-- Status Message -->
+    <p id="status"></p>
+
+    <!-- Next Level Button -->
+    <button id="next-level-btn" style="display:none;">Next Level</button>
+  </div>
+
+  <script>
+  
+  const levels = [
+    {
+      name: "Level 1: Create a Bell State (Φ+)",
+      initialState: [
+        [1,0],  // α0 = 1 + 0i => |00>
+        [0,0],  // α1 = 0
+        [0,0],  // α2 = 0
+        [0,0]   // α3 = 0
+      ],
+      // Target: (|00> + |11>)/√2
+      // Real only => α0 = 1/√2, α3 = 1/√2
+      targetState: [
+        [0.707,0], // |00>
+        [0,0],     // |01>
+        [0,0],     // |10>
+        [0.707,0]  // |11>
+      ]
+    },
+    {
+      name: "Level 2: Another Bell State (Φ−)",
+      initialState: [
+        [1,0],
+        [0,0],
+        [0,0],
+        [0,0]
+      ],
+      // Target: (|00> - |11>)/√2
+      // => α0 = 1/√2, α3 = -1/√2
+      targetState: [
+        [0.707,0], // |00>
+        [0,0],     // |01>
+        [0,0],     // |10>
+        [-0.707,0] // |11>
+      ]
+    },
+    {
+      name: "Level 3: Complex Phase Entangled State",
+      initialState: [
+        [1,0],
+        [0,0],
+        [0,0],
+        [0,0]
+      ],
+      // Target: (|00> + i|11>)/√2
+      // => α0 = 1/√2, α3 = i/√2 => (0, 0.707)
+      targetState: [
+        [0.707,0],
+        [0,0],
+        [0,0],
+        [0,0.707]
+      ]
+    }
+  ];
+
+  /************** 2. GATE DEFINITIONS (4x4) **************/
+  // We'll define single-qubit gates (X, Z, H, S) acting on
+  // qubit 1 or qubit 2, plus CNOT in both directions.
+  // Each entry is a complex pair [re, im].
+
+  // Identity (2x2)
+  const I_2 = [
+    [[1,0], [0,0]],
+    [[0,0], [1,0]]
+  ];
+  // Pauli-X (2x2)
+  const X_2 = [
+    [[0,0], [1,0]],
+    [[1,0], [0,0]]
+  ];
+  // Pauli-Z (2x2)
+  const Z_2 = [
+    [[1,0], [0,0]],
+    [[0,0], [-1,0]]
+  ];
+  // Hadamard (2x2)
+  const H_2 = [
+    [[0.707,0], [0.707,0]],
+    [[0.707,0], [-0.707,0]]
+  ];
+  // S gate (phase π/2 on |1>)
+  const S_2 = [
+    [[1,0], [0,0]],
+    [[0,0], [0,1]]
+  ];
+
+  // Use tensor product to get 4x4 for single-qubit gates
+  function tensorProduct2(gateA, gateB) {
+    // gateA, gateB are each 2x2 (complex)
+    // We produce a 4x4 result: for row in A, col in A, row in B, col in B
+    // result[2*rowA + rowB][2*colA + colB] = A[rowA][colA]*B[rowB][colB]
+    let result = new Array(4).fill(null).map(() => new Array(4).fill([0,0]));
+    for (let rowA=0; rowA<2; rowA++){
+      for (let colA=0; colA<2; colA++){
+        for (let rowB=0; rowB<2; rowB++){
+          for (let colB=0; colB<2; colB++){
+            let idxRow = 2*rowA + rowB;
+            let idxCol = 2*colA + colB;
+            // Multiply the complex numbers
+            let product = complexMul(gateA[rowA][colA], gateB[rowB][colB]);
+            // Add to whatever was there
+            if (Array.isArray(result[idxRow][idxCol])) {
+              let sum = complexAdd(result[idxRow][idxCol], product);
+              result[idxRow][idxCol] = sum;
+            } else {
+              result[idxRow][idxCol] = product;
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  // Single-qubit gates on qubit 1 => gate ⊗ I
+  // Single-qubit gates on qubit 2 => I ⊗ gate
+  const X1 = tensorProduct2(X_2, I_2);
+  const X2 = tensorProduct2(I_2, X_2);
+  const Z1 = tensorProduct2(Z_2, I_2);
+  const Z2 = tensorProduct2(I_2, Z_2);
+  const H1 = tensorProduct2(H_2, I_2);
+  const H2 = tensorProduct2(I_2, H_2);
+  const S1 = tensorProduct2(S_2, I_2);
+  const S2 = tensorProduct2(I_2, S_2);
+
+  // CNOT(1->2): if qubit 1 is 1, flip qubit 2
+  // In basis |00>,|01>,|10>,|11>, matrix is:
+  // |00> -> |00>, |01> -> |01>, |10> -> |11>, |11> -> |10>
+  // 1 0 0 0
+  // 0 1 0 0
+  // 0 0 0 1
+  // 0 0 1 0
+  const CNOT12 = [
+    [[1,0],[0,0],[0,0],[0,0]],
+    [[0,0],[1,0],[0,0],[0,0]],
+    [[0,0],[0,0],[0,0],[1,0]],
+    [[0,0],[0,0],[1,0],[0,0]]
+  ];
+
+  // CNOT(2->1): if qubit 2 is 1, flip qubit 1
+  // 1 0 0 0
+  // 0 0 0 1
+  // 0 0 1 0
+  // 0 1 0 0
+  const CNOT21 = [
+    [[1,0],[0,0],[0,0],[0,0]],
+    [[0,0],[0,0],[0,0],[1,0]],
+    [[0,0],[0,0],[1,0],[0,0]],
+    [[0,0],[1,0],[0,0],[0,0]]
+  ];
+
+  // We'll keep all gates in a dictionary for quick lookup
+  const gatesDict = {
+    "X1": X1, "X2": X2,
+    "Z1": Z1, "Z2": Z2,
+    "H1": H1, "H2": H2,
+    "S1": S1, "S2": S2,
+    "CNOT(1→2)": CNOT12,
+    "CNOT(2→1)": CNOT21
+  };
+
+  // The set of gates we allow the player to apply:
+  // (Feel free to add or remove as needed.)
+  const gateNames = [
+    "X1","X2", "Z1","Z2", "H1","H2", "S1","S2", 
+    "CNOT(1→2)", "CNOT(2→1)"
+  ];
+
+  /************** 3. GAME STATE **************/
+  let currentLevel = 0;
+  let currentState = null;  // 4D complex vector
+  let targetState = null;   // 4D complex vector
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadLevel(0);
+
+    // Next level button
+    const nextLevelBtn = document.getElementById("next-level-btn");
+    nextLevelBtn.addEventListener("click", () => {
+      if (currentLevel < levels.length - 1) {
+        loadLevel(currentLevel + 1);
+      } else {
+        document.getElementById("status").innerText = 
+          "All levels completed! Congratulations!";
+        nextLevelBtn.style.display = "none";
+      }
+    });
+  });
+
+  /************** 4. LOAD A LEVEL **************/
+  function loadLevel(levelIndex) {
+    currentLevel = levelIndex;
+    const level = levels[levelIndex];
+
+    // Deep copy states so we don't modify the original arrays
+    currentState = JSON.parse(JSON.stringify(level.initialState));
+    targetState  = JSON.parse(JSON.stringify(level.targetState));
+
+    // Update UI
+    document.getElementById("level-info").innerText = level.name;
+    document.getElementById("current-state").innerText = formatState(currentState);
+    document.getElementById("target-state").innerText = formatState(targetState);
+    document.getElementById("status").innerText = "";
+
+    // Show gate buttons
+    const gateButtonsDiv = document.getElementById("gate-buttons");
+    gateButtonsDiv.innerHTML = "";
+    gateNames.forEach(gName => {
+      const btn = document.createElement("button");
+      btn.innerText = gName;
+      btn.className = "gate-button";
+      btn.addEventListener("click", () => applyGate(gName));
+      gateButtonsDiv.appendChild(btn);
+    });
+
+    // Hide Next Level until user succeeds
+    document.getElementById("next-level-btn").style.display = "none";
+  }
+
+  /************** 5. APPLY A GATE **************/
+  function applyGate(gateName) {
+    const gateMatrix = gatesDict[gateName];
+    currentState = matrixVectorMultiply(gateMatrix, currentState);
+    normalizeState(currentState);
+
+    // Update UI
+    document.getElementById("current-state").innerText = formatState(currentState);
+
+    // Check if the user has succeeded (up to a global phase)
+    if (checkSuccessUpToGlobalPhase(currentState, targetState)) {
+      document.getElementById("status").innerText = "Success! You achieved the target state.";
+      document.getElementById("next-level-btn").style.display = "inline-block";
+    }
+  }
+
+  /************** 6. SUCCESS CHECK (IGNORE GLOBAL PHASE) **************/
+  function checkSuccessUpToGlobalPhase(stateA, stateB) {
+    // 1) Find the first nonzero amplitude in B to define a reference.
+    // 2) Compute ratio = A[k] / B[k], for that k, as the global phase factor.
+    // 3) Multiply B by that factor and compare each amplitude with A.
+
+    // If both are effectively the zero state (shouldn't happen), just return false
+    let normB = vectorNorm(stateB);
+    if (normB < 1e-9) return false;
+
+    // Find first nonzero amplitude in B
+    let firstIndex = -1;
+    for (let i=0; i<4; i++) {
+      let magB = magnitude(stateB[i]);
+      if (magB > 1e-9) {
+        firstIndex = i;
+        break;
+      }
+    }
+    if (firstIndex < 0) return false; // B is all zero
+
+    // ratio = A[firstIndex] / B[firstIndex]
+    let ratio = complexDiv(stateA[firstIndex], stateB[firstIndex]);
+
+    // Now scale B by ratio
+    let scaledB = stateB.map(amp => complexMul(amp, ratio));
+
+    // Compare scaledB to A
+    for (let i=0; i<4; i++) {
+      let diff = complexSub(stateA[i], scaledB[i]);
+      if (magnitude(diff) > 0.05) { // tolerance
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /************** 7. HELPER FUNCTIONS **************/
+  // (A) Multiply 4x4 matrix by 4x1 vector
+  function matrixVectorMultiply(matrix, vector) {
+    // matrix[i][j] is [re, im]
+    // vector[j] is [re, im]
+    // out[i] = sum_j ( matrix[i][j] * vector[j] )
+    let out = [ [0,0], [0,0], [0,0], [0,0] ];
+    for (let i=0; i<4; i++){
+      let sum = [0,0];
+      for (let j=0; j<4; j++){
+        let product = complexMul(matrix[i][j], vector[j]);
+        sum = complexAdd(sum, product);
+      }
+      out[i] = sum;
+    }
+    return out;
+  }
+
+  // (B) Normalize a 4D quantum state
+  function normalizeState(state) {
+    let norm = vectorNorm(state);
+    if (norm < 1e-9) return; // avoid division by zero
+    for (let i=0; i<4; i++){
+      state[i][0] /= norm;
+      state[i][1] /= norm;
+    }
+  }
+
+  function vectorNorm(state) {
+    // sqrt of sum(|amp|^2)
+    let sumSq = 0;
+    for (let i=0; i<4; i++){
+      sumSq += magnitudeSq(state[i]);
+    }
+    return Math.sqrt(sumSq);
+  }
+
+  // (C) Complex arithmetic
+  function complexMul(a, b) {
+    // (a.re + i a.im)*(b.re + i b.im)
+    let re = a[0]*b[0] - a[1]*b[1];
+    let im = a[0]*b[1] + a[1]*b[0];
+    return [re, im];
+  }
+  function complexDiv(a, b) {
+    // a/b = a * conj(b) / |b|^2
+    let denom = b[0]*b[0] + b[1]*b[1];
+    if (denom < 1e-9) return [0,0];
+    let re = (a[0]*b[0] + a[1]*b[1]) / denom;
+    let im = (a[1]*b[0] - a[0]*b[1]) / denom;
+    return [re, im];
+  }
+  function complexAdd(a, b) {
+    return [a[0]+b[0], a[1]+b[1]];
+  }
+  function complexSub(a, b) {
+    return [a[0]-b[0], a[1]-b[1]];
+  }
+  function magnitudeSq(a) {
+    return a[0]*a[0] + a[1]*a[1];
+  }
+  function magnitude(a) {
+    return Math.sqrt(magnitudeSq(a));
+  }
+
+  // (D) Format state as a string
+  function formatState(state) {
+    // state is an array of 4 complex pairs.
+    // We label basis states: 0->|00>, 1->|01>, 2->|10>, 3->|11>
+    let labels = ["|00>", "|01>", "|10>", "|11>"];
+    let result = "";
+    for (let i=0; i<4; i++){
+      let [re, im] = state[i].map(x => roundTo(x, 3));
+      // If amplitude is negligible, skip
+      if (Math.sqrt(re*re + im*im) < 0.001) continue;
+      result += `(${complexStr(re, im)}) ${labels[i]} + `;
+    }
+    if (result === "") return "0 (all amplitudes ~0)";
+    // remove trailing " + "
+    return result.slice(0, -3);
+  }
+
+  function complexStr(re, im) {
+    // Return "re" if im=0, or "re + i im" etc.
+    if (Math.abs(im) < 1e-6) return `${re}`;
+    let sign = im >= 0 ? "+" : "-";
+    let imVal = Math.abs(im);
+    return `${re} ${sign} i${imVal}`;
+  }
+
+  function roundTo(num, digits) {
+    return parseFloat(num.toFixed(digits));
+  }
+  </script>
+
+</body>
+</html>
